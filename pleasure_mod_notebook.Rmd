@@ -1,0 +1,166 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+
+All based on https://juliasilge.com/blog/word-associations/.
+
+
+First, the libraries:
+```{r}
+library(tidyverse)
+library(here)
+library(igraph)
+library(ggraph)
+library(tidygraph)
+library(knitr)
+library(magrittr)
+```
+
+Then import the data:
+```{r}
+swow_raw <- read_csv(here("SWOW-EN.R100.csv"))
+```
+
+Now create forward associations
+```{r}
+swow_forward <- swow_raw %>% 
+    select(from = cue, to = R1, gender, age, nativeLanguage) %>%
+    bind_rows(
+        swow_raw %>% 
+            select(from = R1, to = R2, gender, age, nativeLanguage)
+    ) %>%
+    bind_rows(
+        swow_raw %>% 
+            select(from = R2, to = R3, gender, age, nativeLanguage)
+    ) %>%
+    filter(!is.na(to))
+```
+
+And limit this to "pleasure" as the first word
+```{r}
+swow_pleasure <- swow_forward %>%
+    filter(from == "pleasure")
+```
+
+Lets get a picture as some sort of sanity check
+
+```{r}
+swow_pleasure %>%
+  count(to, sort = TRUE) %>%
+  top_n(15, n) %>% 
+  ggplot(aes(x = fct_reorder(to, n), y = n)) + 
+  geom_col() + 
+  coord_flip()
+```
+Ok, that looks legit.
+
+What we want is the ego network of "pleasure" from the whole froward association network.
+
+Then we'll add some node characteristics
+* Centrality
+* Community
+
+```{r}
+pleasure_ego_undirected <- swow_forward %>%
+  select(from, to) %>%
+  graph_from_data_frame() %>%
+  make_ego_graph(nodes = "pleasure", order = 1, mode = "all") %>%
+  extract2(1) %>%
+  as_tbl_graph(directed = FALSE) %>%
+  mutate(community = as.factor(group_walktrap())) %>%
+  mutate(centrality = centrality_degree())
+```
+
+Lets make a list of the nodes so we can see which ones we want to remove.
+
+```{r}
+list_nodes <- pleasure_ego_undirected %>%
+  activate(nodes) %>%
+  as.tibble() %>%
+  kable()
+```
+
+Lets list the ones we want to remove so we can filter them out
+
+```{r}
+manual_removal <- c("vagina", "penis", "sex", "gay", "intimate", "gender", "bitch", "drug", "fuck", "sexual", "orgasm", "erection", "pleasure", "lesbian", "bondage", "kinky", "erotic", "nudity", "hormones", "taboo", "oral", "porn", "semen", "masturbation", "penetration", "horny", "clitoris", "vibrator", "vibration", "breastfeeding", "masturbate", "anal", "blowjob", "ejaculation", "sadomasochism", "cum", "sec", "spanking", "wan", "hand job", "fellatio", "thighs", "genitalia", "tossing", "sex-drive", "flagellation", "erotica", "titlometre", "laisure", "onan", "co,pletion")
+```
+
+
+Lets make a network that has 
+* Only the strongest edges (too many connections clutters up the picture and takes ages to plot)
+* No nodes we want to filter out
+* Only the most connected nodes
+
+Then we'll have to recalculate centrality and community.
+
+```{r}
+pleasure_ego_trim <- pleasure_ego_undirected %>%
+  activate(edges) %>%
+  group_by(from, to) %>%
+  mutate(weight = sum(n())) %>%
+  ungroup() %>%
+  distinct() %>%
+  filter(weight > 10) %>%
+  activate(nodes) %>%
+  filter(!name %in% manual_removal) %>%
+  top_n(100, centrality) %>%
+  mutate(community = as.factor(group_walktrap())) %>%
+  mutate(centrality = centrality_degree()) %>%
+  mutate(name = as.character(name))
+```
+
+There might be too many communities (some of which might have very few nodes in them). Lets check it out.
+
+```{r}
+pleasure_ego_trim %>%
+  activate(nodes) %>%
+  as.tibble() %>%
+  count(community) %>%
+  ggplot(aes(x = fct_reorder(community, n), y = n)) + 
+  geom_col() + 
+  coord_flip()
+```
+
+Ok, so there are four serious communities. Lets clump the others into a single one. And while we're at it, giove the nodes an ID factor:
+
+```{r}
+pleasure_ego_trim <- pleasure_ego_trim %>%
+  activate(nodes) %>%
+  mutate(community = fct_collapse(community, "5" = c("5", "6", "7", "8", "9", "10", "11"))) %>%
+  mutate(id = row_number()) %>%
+  as_tbl_graph()
+```
+
+Lets have a look:
+```{r}
+ggraph(pleasure_ego_trim, layout = 'graphopt', charge = 1) + 
+  geom_edge_link(alpha = .1, colour = "white") + 
+  geom_node_text(aes(label = name, colour = community), nudge_y = 200) + 
+  geom_node_point(aes(colour = community, size = centrality)) +
+  guides(colour = FALSE, alpha = FALSE, size = FALSE) + 
+  theme_graph(background = "black")
+```
+
+Let's test this out with two words selected in by the app:
+```{r}
+
+selected <- c("holiday", "happiness")
+
+ggraph(pleasure_ego_trim, layout = 'graphopt', charge = .05) + 
+  geom_edge_link(alpha = .1, colour = "white") + 
+  geom_node_text(aes(label = if_else(name %in% selected, as.character(name), ""), colour = community), nudge_y = 100) + 
+  geom_node_point(aes(alpha = if_else(name %in% selected, 1, 0), colour = community, size = centrality)) +
+  guides(colour = FALSE, alpha = FALSE, size = FALSE) + 
+  theme_graph(background = "black")
+```
+
+So, let's export an RDS file of pleasure_ego_trim that can be used in the app.
+
+```{r}
+saveRDS(pleasure_ego_trim, here("pleasure_mod_app", "pleasure_ego_trim.rds"))
+```
+
