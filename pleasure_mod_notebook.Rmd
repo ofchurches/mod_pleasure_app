@@ -164,3 +164,25 @@ So, let's export an RDS file of pleasure_ego_trim that can be used in the app.
 saveRDS(pleasure_ego_trim, here("pleasure_mod_app", "pleasure_ego_trim.rds"))
 ```
 
+Then a couple of other bits so that the excellent designers can make this better...
+
+First, a list of the nodes that will be in the final graph with degree and community saved as a csv.
+
+```{r}
+pleasure_words <- pleasure_ego_trim %>%
+  activate(nodes) %>%
+  as.tibble() %>%
+  write.csv(here("pleasure_words.csv"), row.names = FALSE)
+  
+```
+
+And the edgelist.
+
+```{r}
+pleasure_connections <- pleasure_ego_trim %>%
+  activate(edges) %>%
+  as.tibble() %>%
+  write.csv(here("pleasure_connections.csv"), row.names = FALSE)
+```
+
+
